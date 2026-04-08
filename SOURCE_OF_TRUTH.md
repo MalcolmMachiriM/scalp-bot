@@ -48,6 +48,8 @@ Authoritative files:
   - Higher timeframe EMA alignment for directional bias.
 - Entry trigger:
   - Entry timeframe EMA momentum + RSI threshold confirmation.
+- Optional flag pattern confirmation (disabled by default):
+  - When enabled, requires a bull or bear flag (pole impulse + tight consolidation + breakout) on the entry timeframe that matches the EMA/RSI signal direction.
 - Volatility-aware exits:
   - ATR-based SL/TP.
   - optional break-even rule.

@@ -44,6 +44,13 @@ input double InpBreakEvenAtrTrigger      = 1.0;
 input bool   InpUseTrailingStop          = true;
 input double InpTrailingAtrMultiplier    = 1.2;
 
+input group "Flag Pattern (optional confirmation)"
+input bool   InpUseFlagPattern           = false;
+input int    InpFlagPoleBars             = 6;
+input int    InpFlagConsolidationBars    = 5;
+input double InpFlagMinPoleAtrMultiple   = 1.2;
+input double InpFlagMaxRangeRatio        = 0.72;
+
 CTrade trade;
 
 int gFastEmaHandle = INVALID_HANDLE;
@@ -224,6 +231,138 @@ int BuildSignal(double fastEma, double slowEma, double trendFast, double trendSl
    if(trendUp && momentumUp)
       return 1;
    if(trendDown && momentumDown)
+      return -1;
+   return 0;
+}
+
+double BarHighAt(const int shift)
+{
+   return iHigh(_Symbol, InpEntryTimeframe, shift);
+}
+
+double BarLowAt(const int shift)
+{
+   return iLow(_Symbol, InpEntryTimeframe, shift);
+}
+
+double BarCloseAt(const int shift)
+{
+   return iClose(_Symbol, InpEntryTimeframe, shift);
+}
+
+bool PoleSegmentRange(const int poleFromShift, const int poleToShift, double &outLow, double &outHigh, double &outRange)
+{
+   outLow = DBL_MAX;
+   outHigh = -DBL_MAX;
+   for(int i = poleFromShift; i <= poleToShift; ++i)
+   {
+      outLow = MathMin(outLow, BarLowAt(i));
+      outHigh = MathMax(outHigh, BarHighAt(i));
+   }
+   outRange = outHigh - outLow;
+   return (outRange > 0.0);
+}
+
+bool FlagSegmentRange(const int flagFromShift, const int flagToShift, double &outHigh, double &outLow, double &outRange)
+{
+   outHigh = -DBL_MAX;
+   outLow = DBL_MAX;
+   for(int i = flagFromShift; i <= flagToShift; ++i)
+   {
+      outHigh = MathMax(outHigh, BarHighAt(i));
+      outLow = MathMin(outLow, BarLowAt(i));
+   }
+   outRange = outHigh - outLow;
+   return (outRange > 0.0);
+}
+
+bool DetectBullFlag(const double atr)
+{
+   if(atr <= 0.0)
+      return false;
+   if(InpFlagPoleBars < 3 || InpFlagConsolidationBars < 2)
+      return false;
+
+   const int poleNew = InpFlagConsolidationBars + 1;
+   const int poleOld = InpFlagConsolidationBars + InpFlagPoleBars;
+   const int need = poleOld + 2;
+   if(Bars(_Symbol, InpEntryTimeframe) < need)
+      return false;
+
+   double poleLow = 0.0, poleHigh = 0.0, poleRange = 0.0;
+   if(!PoleSegmentRange(poleNew, poleOld, poleLow, poleHigh, poleRange))
+      return false;
+   if(poleRange < InpFlagMinPoleAtrMultiple * atr)
+      return false;
+
+   const double poleOpenCloseOld = BarCloseAt(poleOld);
+   const double poleOpenCloseNew = BarCloseAt(poleNew);
+   if(poleOpenCloseNew <= poleOpenCloseOld)
+      return false;
+
+   double flagHigh = 0.0, flagLow = 0.0, flagRange = 0.0;
+   if(!FlagSegmentRange(1, InpFlagConsolidationBars, flagHigh, flagLow, flagRange))
+      return false;
+   if(flagRange >= poleRange * InpFlagMaxRangeRatio)
+      return false;
+
+   if(flagLow <= poleLow)
+      return false;
+
+   const double close0 = BarCloseAt(0);
+   if(close0 <= flagHigh)
+      return false;
+
+   return true;
+}
+
+bool DetectBearFlag(const double atr)
+{
+   if(atr <= 0.0)
+      return false;
+   if(InpFlagPoleBars < 3 || InpFlagConsolidationBars < 2)
+      return false;
+
+   const int poleNew = InpFlagConsolidationBars + 1;
+   const int poleOld = InpFlagConsolidationBars + InpFlagPoleBars;
+   const int need = poleOld + 2;
+   if(Bars(_Symbol, InpEntryTimeframe) < need)
+      return false;
+
+   double poleLow = 0.0, poleHigh = 0.0, poleRange = 0.0;
+   if(!PoleSegmentRange(poleNew, poleOld, poleLow, poleHigh, poleRange))
+      return false;
+   if(poleRange < InpFlagMinPoleAtrMultiple * atr)
+      return false;
+
+   const double poleOpenCloseOld = BarCloseAt(poleOld);
+   const double poleOpenCloseNew = BarCloseAt(poleNew);
+   if(poleOpenCloseNew >= poleOpenCloseOld)
+      return false;
+
+   double flagHigh = 0.0, flagLow = 0.0, flagRange = 0.0;
+   if(!FlagSegmentRange(1, InpFlagConsolidationBars, flagHigh, flagLow, flagRange))
+      return false;
+   if(flagRange >= poleRange * InpFlagMaxRangeRatio)
+      return false;
+
+   if(flagHigh >= poleHigh)
+      return false;
+
+   const double close0 = BarCloseAt(0);
+   if(close0 >= flagLow)
+      return false;
+
+   return true;
+}
+
+int AnalyzeFlagPattern(const double atr)
+{
+   const bool bull = DetectBullFlag(atr);
+   const bool bear = DetectBearFlag(atr);
+   if(bull && !bear)
+      return 1;
+   if(bear && !bull)
       return -1;
    return 0;
 }
@@ -441,6 +580,13 @@ void OnTick()
    const int signal = BuildSignal(fastEma, slowEma, trendFast, trendSlow, rsi);
    if(signal == 0)
       return;
+
+   if(InpUseFlagPattern)
+   {
+      const int flagSig = AnalyzeFlagPattern(atr);
+      if(flagSig != signal)
+         return;
+   }
 
    const double riskPct = ComputeRiskPercent(trendFast, trendSlow, atr);
    OpenTrade(signal, atr, riskPct);
